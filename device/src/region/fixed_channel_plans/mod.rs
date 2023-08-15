@@ -97,9 +97,7 @@ impl<const D: usize, F: FixedChannelRegion<D>> RegionHandler for FixedChannelPla
     ) -> (Datarate, u32) {
         match frame {
             Frame::Join => {
-                // Right now, we only select one of the random 64 channels that are 125 kHz
-                // TODO: randomly select from all 72 channels including the 500 kHz channels
-                let channel = (rng.next_u32() & 0b111111) as u8;
+                let channel = get_random_channel(rng, SubBandAdder::Band2);
                 self.last_tx_channel = channel;
                 // For the join frame, the randomly selected channel dictates the datarate
                 // When TODO above is implemented, this does not require changes
@@ -119,18 +117,18 @@ impl<const D: usize, F: FixedChannelRegion<D>> RegionHandler for FixedChannelPla
                 // else, we must use 0-63
                 let datarate = F::datarates()[datarate as usize].clone().unwrap();
                 if datarate.bandwidth == Bandwidth::_500KHz {
-                    let mut channel = (rng.next_u32() & 0b111) as u8;
+                    let mut channel = get_random_channel(rng, SubBandAdder::Band2);
                     // keep selecting a random channel until we find one that is enabled
                     while !self.channel_mask.is_enabled(channel.into()).unwrap() {
-                        channel = (rng.next_u32() & 0b111) as u8;
+                        channel = get_random_channel(rng, SubBandAdder::Band2);
                     }
                     self.last_tx_channel = channel;
                     (datarate, F::uplink_channels()[(64 + channel) as usize])
                 } else {
-                    let mut channel = (rng.next_u32() & 0b111111) as u8;
+                    let mut channel = get_random_channel(rng, SubBandAdder::Band2);
                     // keep selecting a random channel until we find one that is enabled
                     while !self.channel_mask.is_enabled(channel.into()).unwrap() {
-                        channel = (rng.next_u32() & 0b111111) as u8;
+                        channel = get_random_channel(rng, SubBandAdder::Band2);
                     }
                     self.last_tx_channel = channel;
                     (datarate, F::uplink_channels()[channel as usize])
@@ -154,4 +152,19 @@ impl<const D: usize, F: FixedChannelRegion<D>> RegionHandler for FixedChannelPla
     fn get_rx_datarate(&self, tx_datarate: DR, frame: &Frame, window: &Window) -> Datarate {
         F::get_rx_datarate(tx_datarate, frame, window)
     }
+}
+
+enum SubBandAdder {
+    Band1 = 0b00_000_000, // 0 - 7
+    Band2 = 0b00_001_000, // 8 - 15
+    Band3 = 0b00_010_000, // 16 - 23
+    Band4 = 0b00_011_000, // 24 - 31
+    Band5 = 0b00_100_000, // 32 - 39
+    Band6 = 0b00_101_000, // 40 - 47
+    Band7 = 0b00_110_000, // 48 - 55
+    Band8 = 0b00_111_000, // 56 - 63
+}
+fn get_random_channel<RNG: RngCore>(rng: &mut RNG, band: SubBandAdder) -> u8 {
+    const MASK_0_TO_7: u32 = 0b00_000_111;
+    (rng.next_u32() & MASK_0_TO_7) as u8 | band as u8
 }
