@@ -1,8 +1,10 @@
 [workspace]
 members = [
-    "encoding",
     "device",
+    "encoding",
+    "modulation",
 ]
+resolver = "2"
 
 [profile.dev]
 opt-level = "s"

@@ -1,4 +1,5 @@
-encoding/ @ivajloip
+lora-modulation/ @ceekdee @lthiery @lulf @ivajloip
+encoding/ @ivajloip @lthiery @lulf
 device/ @ivajloip @lthiery @lulf
 
 Cargo.toml @ivajloip @lthiery @lulf

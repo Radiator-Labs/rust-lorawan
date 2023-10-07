@@ -46,6 +46,7 @@ macro_rules! fixed_len_struct {
         $(#[$outer])*
         #[derive(Debug, Eq)]
         #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+        #[cfg_attr(feature = "defmt", derive(defmt::Format))]
         pub struct $type<T: AsRef<[u8]>>(T);
 
         impl<T: AsRef<[u8]>> $type<T> {
@@ -80,6 +81,12 @@ macro_rules! fixed_len_struct {
 
         impl<'a> From<&'a [u8; $size]> for $type<&'a [u8; $size]> {
             fn from(v: &'a [u8; $size]) -> Self {
+                $type(v)
+            }
+        }
+
+        impl From<[u8; $size]> for $type<[u8; $size]> {
+            fn from(v: [u8; $size]) -> Self {
                 $type(v)
             }
         }
@@ -937,6 +944,22 @@ impl<T: AsRef<[u8]>> DevAddr<T> {
     }
 }
 
+impl From<DevAddr<[u8; 4]>> for u32 {
+    fn from(v: DevAddr<[u8; 4]>) -> Self {
+        let bytes = v.as_ref();
+        u32::from(bytes[0]) << 24
+            | u32::from(bytes[1]) << 16
+            | u32::from(bytes[2]) << 8
+            | u32::from(bytes[3])
+    }
+}
+
+impl From<u32> for DevAddr<[u8; 4]> {
+    fn from(v: u32) -> Self {
+        DevAddr([(v >> 24) as u8, (v >> 16) as u8, (v >> 8) as u8, v as u8])
+    }
+}
+
 fixed_len_struct! {
     /// NwkAddr represents a 24 bit network address.
     struct NwkAddr[3];
@@ -980,7 +1003,9 @@ impl<'a> FHDR<'a> {
     /// Gives the piggy-backed MAC ommands associated with the given payload.
     pub fn fopts(&self) -> MacCommandIterator {
         let f_opts_len = FCtrl(self.0[4], self.1).f_opts_len();
-        parse_mac_commands(&self.0[7_usize..(7 + f_opts_len) as usize], self.1)
+        let start = 7;
+        let end = 7 + f_opts_len as usize;
+        parse_mac_commands(&self.0[start..end], self.1)
     }
 }
 

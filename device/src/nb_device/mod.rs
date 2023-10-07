@@ -7,6 +7,9 @@ pub mod session;
 
 pub use region::DR;
 
+#[cfg(test)]
+mod test;
+
 pub struct Shared<R: radio::PhyRxTx + Timings, RNG: RngCore, const N: usize> {
     radio: R,
     credentials: Option<Credentials>,
@@ -20,7 +23,8 @@ pub struct Shared<R: radio::PhyRxTx + Timings, RNG: RngCore, const N: usize> {
 }
 
 #[allow(clippy::large_enum_variant)]
-enum Downlink {
+#[derive(Debug)]
+pub(crate) enum Downlink {
     Data(DecryptedDataPayload<Vec<u8, 256>>),
     Join,
 }
@@ -40,7 +44,7 @@ impl<R: radio::PhyRxTx + Timings, RNG: RngCore, const N: usize> Shared<R, RNG, N
     }
 
     pub fn take_data_downlink(&mut self) -> Option<DecryptedDataPayload<Vec<u8, 256>>> {
-        if let Some(Downlink::Data(payload)) = self.downlink.take() {
+        if let Some(Downlink::Data(payload)) = self.mac.downlink.take() {
             Some(payload)
         } else {
             None

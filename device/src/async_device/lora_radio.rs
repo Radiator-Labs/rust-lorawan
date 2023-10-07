@@ -1,68 +1,35 @@
-use super::radio::{
-    Bandwidth, CodingRate, PhyRxTx, RfConfig, RxQuality, SpreadingFactor, TxConfig,
-};
+use super::radio::{PhyRxTx, RfConfig, RxQuality, TxConfig};
 use super::region::constants::DEFAULT_DBM;
 use super::Timings;
 
 use lora_phy::mod_params::{BoardType, ChipType, RadioError};
 use lora_phy::mod_traits::RadioKind;
-use lora_phy::LoRa;
-
-/// Convert the spreading factor for use in the external lora-phy crate
-impl From<SpreadingFactor> for lora_phy::mod_params::SpreadingFactor {
-    fn from(sf: SpreadingFactor) -> Self {
-        match sf {
-            SpreadingFactor::_7 => lora_phy::mod_params::SpreadingFactor::_7,
-            SpreadingFactor::_8 => lora_phy::mod_params::SpreadingFactor::_8,
-            SpreadingFactor::_9 => lora_phy::mod_params::SpreadingFactor::_9,
-            SpreadingFactor::_10 => lora_phy::mod_params::SpreadingFactor::_10,
-            SpreadingFactor::_11 => lora_phy::mod_params::SpreadingFactor::_11,
-            SpreadingFactor::_12 => lora_phy::mod_params::SpreadingFactor::_12,
-        }
-    }
-}
-
-/// Convert the bandwidth for use in the external lora-phy crate
-impl From<Bandwidth> for lora_phy::mod_params::Bandwidth {
-    fn from(bw: Bandwidth) -> Self {
-        match bw {
-            Bandwidth::_125KHz => lora_phy::mod_params::Bandwidth::_125KHz,
-            Bandwidth::_250KHz => lora_phy::mod_params::Bandwidth::_250KHz,
-            Bandwidth::_500KHz => lora_phy::mod_params::Bandwidth::_500KHz,
-        }
-    }
-}
-
-/// Convert the coding rate for use in the external lora-phy crate
-impl From<CodingRate> for lora_phy::mod_params::CodingRate {
-    fn from(cr: CodingRate) -> Self {
-        match cr {
-            CodingRate::_4_5 => lora_phy::mod_params::CodingRate::_4_5,
-            CodingRate::_4_6 => lora_phy::mod_params::CodingRate::_4_6,
-            CodingRate::_4_7 => lora_phy::mod_params::CodingRate::_4_7,
-            CodingRate::_4_8 => lora_phy::mod_params::CodingRate::_4_8,
-        }
-    }
-}
+use lora_phy::{DelayUs, LoRa};
 
 /// LoRa radio using the physical layer API in the external lora-phy crate
-pub struct LoRaRadio<RK> {
-    pub(crate) lora: LoRa<RK>,
-}
-
-impl<RK> LoRaRadio<RK>
+pub struct LoRaRadio<RK, DLY>
 where
-    RK: RadioKind + 'static,
+    RK: RadioKind,
+    DLY: DelayUs,
 {
-    pub fn new(lora: LoRa<RK>) -> Self {
-        Self { lora }
+    pub(crate) lora: LoRa<RK, DLY>,
+    rx_pkt_params: Option<lora_phy::mod_params::PacketParams>,
+}
+impl<RK, DLY> LoRaRadio<RK, DLY>
+where
+    RK: RadioKind,
+    DLY: DelayUs,
+{
+    pub fn new(lora: LoRa<RK, DLY>) -> Self {
+        Self { lora, rx_pkt_params: None }
     }
 }
 
 /// Provide the timing values for boards supported by the external lora-phy crate
-impl<RK> Timings for LoRaRadio<RK>
+impl<RK, DLY> Timings for LoRaRadio<RK, DLY>
 where
-    RK: RadioKind + 'static,
+    RK: RadioKind,
+    DLY: DelayUs,
 {
     fn get_rx_window_offset_ms(&self) -> i32 {
         match self.lora.get_board_type() {
@@ -82,19 +49,32 @@ where
     }
 }
 
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Error {
+    Radio(RadioError),
+    NoRxParams,
+}
+
+impl From<RadioError> for Error {
+    fn from(err: RadioError) -> Self {
+        Error::Radio(err)
+    }
+}
+
 /// Provide the LoRa physical layer rx/tx interface for boards supported by the external lora-phy
 /// crate
-impl<RK> PhyRxTx for LoRaRadio<RK>
+impl<RK, DLY> PhyRxTx for LoRaRadio<RK, DLY>
 where
-    RK: RadioKind + 'static,
+    RK: RadioKind,
+    DLY: DelayUs,
 {
-    type PhyError = RadioError;
+    type PhyError = Error;
 
     async fn tx(&mut self, config: TxConfig, buffer: &[u8]) -> Result<u32, Self::PhyError> {
         let mdltn_params = self.lora.create_modulation_params(
-            config.rf.spreading_factor.into(),
-            config.rf.bandwidth.into(),
-            config.rf.coding_rate.into(),
+            config.rf.spreading_factor,
+            config.rf.bandwidth,
+            config.rf.coding_rate,
             config.rf.frequency,
         )?;
         let mut tx_pkt_params =
@@ -114,44 +94,36 @@ where
         Ok(0)
     }
 
-    async fn rx(
-        &mut self,
-        config: RfConfig,
-        receiving_buffer: &mut [u8],
-    ) -> Result<(usize, RxQuality), Self::PhyError> {
+    async fn setup_rx(&mut self, config: RfConfig) -> Result<(), Self::PhyError> {
         let mdltn_params = self.lora.create_modulation_params(
-            config.spreading_factor.into(),
-            config.bandwidth.into(),
-            config.coding_rate.into(),
+            config.spreading_factor,
+            config.bandwidth,
+            config.coding_rate,
             config.frequency,
         )?;
-        let rx_pkt_params = self.lora.create_rx_packet_params(
-            8,
-            false,
-            receiving_buffer.len() as u8,
-            true,
-            true,
-            &mdltn_params,
-        )?;
-        self.lora
-            .prepare_for_rx(
-                &mdltn_params,
-                &rx_pkt_params,
-                None,
-                true, // RX continuous
-                false,
-                4,
-                0x00ffffffu32,
-            )
-            .await?;
-        match self.lora.rx(&rx_pkt_params, receiving_buffer).await {
-            Ok((received_len, rx_pkt_status)) => {
-                Ok((
-                    received_len as usize,
-                    RxQuality::new(rx_pkt_status.rssi, rx_pkt_status.snr as i8), // downcast snr
-                ))
+        let rx_pkt_params =
+            self.lora.create_rx_packet_params(8, false, 255, true, true, &mdltn_params)?;
+        self.lora.prepare_for_rx(&mdltn_params, &rx_pkt_params, None, None, false).await?;
+        self.rx_pkt_params = Some(rx_pkt_params);
+        Ok(())
+    }
+
+    async fn rx(
+        &mut self,
+        receiving_buffer: &mut [u8],
+    ) -> Result<(usize, RxQuality), Self::PhyError> {
+        if let Some(rx_params) = &self.rx_pkt_params {
+            match self.lora.rx(rx_params, receiving_buffer).await {
+                Ok((received_len, rx_pkt_status)) => {
+                    Ok((
+                        received_len as usize,
+                        RxQuality::new(rx_pkt_status.rssi, rx_pkt_status.snr as i8), // downcast snr
+                    ))
+                }
+                Err(err) => Err(err.into()),
             }
-            Err(err) => Err(err),
+        } else {
+            Err(Error::NoRxParams)
         }
     }
 }

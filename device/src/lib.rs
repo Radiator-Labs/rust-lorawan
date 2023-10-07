@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![cfg_attr(feature = "async", feature(async_fn_in_trait))]
 #![allow(incomplete_features)]
 
@@ -7,22 +7,23 @@ use heapless::Vec;
 pub mod radio;
 
 mod mac;
+pub use mac::types::*;
 use mac::Mac;
-
-mod types;
-pub use types::*;
 
 pub mod region;
 pub use region::Region;
 
-mod state_machines;
+#[cfg(test)]
+mod test_util;
+
+mod nb_device;
 use core::marker::PhantomData;
 use lorawan::{
     keys::{CryptoFactory, AES128},
-    parser::{DecryptedDataPayload, DevAddr},
+    parser::{DecryptedDataPayload, DevAddr, EUI64},
 };
-use state_machines::Shared;
-pub use state_machines::{no_session, no_session::SessionData, session};
+use nb_device::Shared;
+pub use nb_device::{no_session, session};
 
 pub use rand_core::RngCore;
 
@@ -103,20 +104,27 @@ pub struct SendData<'a> {
     confirmed: bool,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum State {
     NoSession(no_session::NoSession),
     Session(session::Session),
 }
 
 use core::default::Default;
+
 impl State {
     fn new() -> Self {
         State::NoSession(no_session::NoSession::new())
     }
 
-    fn new_abp(newskey: AES128, appskey: AES128, devaddr: DevAddr<[u8; 4]>) -> Self {
-        let session_data = SessionData::new(newskey, appskey, devaddr);
-        State::Session(session::Session::new(session_data))
+    fn new_abp(
+        newskey: NewSKey,
+        appskey: AppSKey,
+        devaddr: DevAddr<[u8; 4]>,
+        region: region::Configuration,
+    ) -> Self {
+        let session_keys = SessionKeys::new(newskey, appskey, devaddr);
+        State::Session(session::Session::new(session_keys, region))
     }
 }
 
@@ -128,9 +136,62 @@ pub trait Timings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum JoinMode {
-    OTAA { deveui: [u8; 8], appeui: [u8; 8], appkey: [u8; 16] },
-    ABP { newskey: AES128, appskey: AES128, devaddr: DevAddr<[u8; 4]> },
+    OTAA { deveui: DevEui, appeui: AppEui, appkey: AppKey },
+    ABP { newskey: NewSKey, appskey: AppSKey, devaddr: DevAddr<[u8; 4]> },
 }
+macro_rules! lorawan_key {
+    (
+        $(#[$outer:meta])*
+        pub struct $type:ident(AES128);
+    ) => {
+        $(#[$outer])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+        #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+        pub struct $type(AES128);
+
+        impl From<[u8;16]> for $type {
+            fn from(key: [u8; 16]) -> Self {
+                $type(AES128(key))
+            }
+        }
+        };
+    }
+
+lorawan_key!(
+    pub struct AppKey(AES128);
+);
+lorawan_key!(
+    pub struct NewSKey(AES128);
+);
+lorawan_key!(
+    pub struct AppSKey(AES128);
+);
+
+macro_rules! lorawan_eui {
+    (
+        $(#[$outer:meta])*
+        pub struct $type:ident(EUI64<[u8; 8]>);
+    ) => {
+        $(#[$outer])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+        #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+        pub struct $type(EUI64<[u8; 8]>);
+
+        impl From<[u8;8]> for $type {
+            fn from(key: [u8; 8]) -> Self {
+                $type(EUI64::from(key))
+            }
+        }
+        };
+    }
+lorawan_eui!(
+    pub struct DevEui(EUI64<[u8; 8]>);
+);
+lorawan_eui!(
+    pub struct AppEui(EUI64<[u8; 8]>);
+);
 
 #[allow(dead_code)]
 impl<R, C, RNG, const N: usize> Device<R, C, RNG, N>
@@ -157,12 +218,12 @@ where
                 State::new(),
             ),
             JoinMode::ABP { newskey, appskey, devaddr } => (
-                Shared::new(radio, None, region, Mac::default(), rng),
-                State::new_abp(newskey, appskey, devaddr),
+                Shared::new(radio, None, region.clone(), Mac::default(), rng),
+                State::new_abp(newskey, appskey, devaddr, region),
             ),
         };
 
-        Device { crypto: PhantomData::default(), shared, state: Some(state) }
+        Device { crypto: PhantomData, shared, state: Some(state) }
     }
 
     pub fn get_radio(&mut self) -> &mut R {
@@ -202,15 +263,15 @@ where
 
     pub fn get_fcnt_up(&self) -> Option<u32> {
         if let State::Session(session) = &self.state.as_ref().unwrap() {
-            Some(session.get_session_data().fcnt_up())
+            Some(session.get_mac().fcnt_up())
         } else {
             None
         }
     }
 
-    pub fn get_session_keys(&self) -> Option<SessionKeys> {
+    pub fn get_session_keys(&self) -> Option<&SessionKeys> {
         if let State::Session(session) = &self.state.as_ref().unwrap() {
-            Some(SessionKeys::copy_from_session_data(session.get_session_data()))
+            Some(session.get_session_keys())
         } else {
             None
         }
