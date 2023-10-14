@@ -154,6 +154,7 @@ impl<const D: usize, F: FixedChannelRegion<D>> RegionHandler for FixedChannelPla
     }
 }
 
+#[allow(dead_code)]
 enum SubBandAdder {
     Band1 = 0b00_000_000, // 0 - 7
     Band2 = 0b00_001_000, // 8 - 15
