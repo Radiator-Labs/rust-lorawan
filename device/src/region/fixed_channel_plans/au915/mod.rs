@@ -6,7 +6,7 @@ use frequencies::*;
 mod datarates;
 use datarates::*;
 
-const AU_DBM: i8 = 21;
+const AU_DBM: i8 = 15;
 const DEFAULT_RX2: u32 = 923_300_000;
 
 pub(crate) type AU915 = FixedChannelPlan<16, AU915Region>;
